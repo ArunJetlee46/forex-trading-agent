@@ -9,6 +9,7 @@ import pandas as pd
 from config import config
 from src.agent.indicators import compute_all
 from src.agent.portfolio import Portfolio, Trade
+from src.agent.profit_analyzer import ProfitAnalysis, ProfitAnalyzer
 from src.agent.risk_manager import RiskManager
 from src.agent.signals import Signal, SignalGenerator, SignalType
 from src.data.fetcher import DataFetcher
@@ -63,6 +64,10 @@ class ForexTradingAgent:
         self.fetcher = DataFetcher(cache_ttl=self._cfg.data["cache_ttl_seconds"])
         self.processor = DataProcessor()
         self.broker = broker  # optional MT5Broker (or None for paper trading)
+        self.profit_analyzer = ProfitAnalyzer(
+            min_risk_reward=trd.get("min_risk_reward", 1.5),
+            min_confirmations=sig["min_confirmations"],
+        )
 
         self._ind_params = {
             "ema_fast": ind["ema_fast"],
@@ -77,6 +82,7 @@ class ForexTradingAgent:
 
         self._running = False
         self._last_signals: Dict[str, Signal] = {}
+        self._last_dfs: Dict[str, pd.DataFrame] = {}  # cached enriched DataFrames
 
     # ------------------------------------------------------------------
     # Core workflow
@@ -97,6 +103,7 @@ class ForexTradingAgent:
             return Signal(SignalType.HOLD, 0, price=0.0)
 
         enriched = compute_all(df, **self._ind_params)
+        self._last_dfs[pair] = enriched  # cache for downstream profit analysis
         signal = self.signal_gen.generate(enriched)
         self._last_signals[pair] = signal
         return signal
@@ -157,6 +164,131 @@ class ForexTradingAgent:
         return pnl
 
     # ------------------------------------------------------------------
+    # Profit analysis & automated execution
+    # ------------------------------------------------------------------
+
+    def analyse_profit(self, pair: str, signal: Signal) -> Optional[ProfitAnalysis]:
+        """Run profit analysis for an actionable *signal* on *pair*.
+
+        Returns ``None`` when the signal is ``HOLD`` or the risk manager
+        cannot compute a position (e.g. drawdown breached).
+        """
+        if signal.signal == SignalType.HOLD:
+            return None
+
+        spec = self.risk_manager.calculate_position(
+            pair=pair,
+            direction=signal.signal.value,
+            entry_price=signal.price,
+        )
+        if spec is None:
+            return None
+
+        df = self._last_dfs.get(pair)
+        return self.profit_analyzer.analyse(
+            pair=pair,
+            direction=spec.direction,
+            entry_price=spec.entry_price,
+            stop_loss=spec.stop_loss,
+            take_profit=spec.take_profit,
+            risk_amount=spec.risk_amount,
+            confirmations=signal.confirmations,
+            df=df,
+        )
+
+    def auto_execute_signals(self) -> List[Trade]:
+        """Analyse all pairs, apply profit analysis, and execute viable trades.
+
+        For each pair that does *not* already have an open position:
+
+        1. Fetch market data and generate a signal.
+        2. Run :meth:`analyse_profit` to estimate expected profit.
+        3. Execute the trade only when the analysis is viable.
+
+        Returns
+        -------
+        list[Trade]
+            Trades that were opened during this cycle.
+        """
+        executed: List[Trade] = []
+        open_pairs = {t.pair for t in self.portfolio.get_open_trades()}
+
+        for pair in self.pairs:
+            if pair in open_pairs:
+                logger.debug("Skipping %s: already has an open position.", pair)
+                continue
+
+            signal = self.analyse(pair)
+
+            if signal.signal == SignalType.HOLD:
+                logger.debug("%s: HOLD – skipping.", pair)
+                continue
+
+            analysis = self.analyse_profit(pair, signal)
+            if analysis is None:
+                logger.info("%s: profit analysis unavailable – skipping.", pair)
+                continue
+
+            if not analysis.is_viable:
+                logger.info(
+                    "Skipping %s %s: not viable (RR=%.2f, EV=$%.2f).",
+                    pair, signal.signal.value,
+                    analysis.risk_reward_ratio, analysis.expected_value,
+                )
+                continue
+
+            trade = self.execute_signal(pair, signal)
+            if trade is not None:
+                logger.info(
+                    "Auto-executed %s %s  entry=%.5f  SL=%.5f  TP=%.5f  EV=$%.2f",
+                    trade.direction, pair,
+                    trade.entry_price, trade.stop_loss, trade.take_profit,
+                    analysis.expected_value,
+                )
+                executed.append(trade)
+
+        return executed
+
+    def monitor_positions(self, current_prices: Dict[str, float]) -> List[Trade]:
+        """Check open positions against *current_prices* and close SL/TP hits.
+
+        Parameters
+        ----------
+        current_prices:
+            Mapping of pair → current market price (e.g. ``{"EUR/USD": 1.09}``).
+
+        Returns
+        -------
+        list[Trade]
+            Trades that were closed during this call.
+        """
+        closed: List[Trade] = []
+        for trade in self.portfolio.get_open_trades():
+            price = current_prices.get(trade.pair)
+            if price is None:
+                continue
+
+            hit_sl, hit_tp = False, False
+            if trade.direction == "BUY":
+                hit_sl = price <= trade.stop_loss
+                hit_tp = price >= trade.take_profit
+            else:  # SELL
+                hit_sl = price >= trade.stop_loss
+                hit_tp = price <= trade.take_profit
+
+            if hit_sl or hit_tp:
+                exit_price = trade.stop_loss if hit_sl else trade.take_profit
+                status = "STOPPED" if hit_sl else "CLOSED"
+                pnl = self.close_trade(trade, exit_price, status)
+                logger.info(
+                    "Auto-closed trade %s [%s]: %s  exit=%.5f  pnl=$%.2f",
+                    trade.trade_id, status, trade.pair, exit_price, pnl,
+                )
+                closed.append(trade)
+
+        return closed
+
+    # ------------------------------------------------------------------
     # Status / introspection
     # ------------------------------------------------------------------
 
@@ -185,5 +317,6 @@ class ForexTradingAgent:
         self.portfolio.reset()
         self.risk_manager.reset()
         self._last_signals.clear()
+        self._last_dfs.clear()
         self.fetcher.clear_cache()
         logger.info("Agent reset.")

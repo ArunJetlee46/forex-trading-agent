@@ -62,6 +62,27 @@ def parse_args(argv=None):
     )
     bt_parser.add_argument("--period", default="1y", help="History period (e.g. 1y, 6mo).")
 
+    # ---- trade ----
+    trade_parser = subparsers.add_parser(
+        "trade",
+        help="Auto-execute trades based on accurate profit analysis.",
+    )
+    trade_parser.add_argument(
+        "pairs",
+        nargs="*",
+        default=None,
+        help="Pairs to trade. Defaults to all configured pairs.",
+    )
+    trade_parser.add_argument(
+        "--broker",
+        choices=["mt5"],
+        default=None,
+        help="Connect to a live broker for data and execution (currently: mt5).",
+    )
+    trade_parser.add_argument("--mt5-login", type=int, default=None, help="MT5 account login number.")
+    trade_parser.add_argument("--mt5-password", default=None, help="MT5 account password.")
+    trade_parser.add_argument("--mt5-server", default=None, help="MT5 broker server name.")
+
     return parser.parse_args(argv)
 
 
@@ -155,12 +176,50 @@ def cmd_backtest(args) -> None:
         print()
 
 
+def cmd_trade(args) -> None:
+    """Auto-execute trades for all configured pairs after profit analysis."""
+    from src.agent.core import ForexTradingAgent
+
+    broker = None
+    mt5_fetcher = None
+    if getattr(args, "broker", None) == "mt5":
+        result = _build_mt5_broker(args)
+        if result is not None:
+            broker, mt5_fetcher = result
+
+    pairs = args.pairs or None
+    agent = ForexTradingAgent(pairs=pairs, broker=broker)
+
+    if mt5_fetcher is not None:
+        agent.fetcher = mt5_fetcher
+
+    print("\n=== Auto-Trade Execution (with Profit Analysis) ===\n")
+    trades = agent.auto_execute_signals()
+    if trades:
+        print(f"Executed {len(trades)} trade(s):\n")
+        for trade in trades:
+            print(
+                f"  [{trade.trade_id}] {trade.direction:4s} {trade.pair:10s}"
+                f"  entry={trade.entry_price:.5f}"
+                f"  SL={trade.stop_loss:.5f}"
+                f"  TP={trade.take_profit:.5f}"
+                f"  risk=${trade.risk_amount:.2f}"
+            )
+    else:
+        print("No viable trades found after profit analysis.")
+    print()
+
+    if mt5_fetcher is not None:
+        mt5_fetcher.disconnect()
+
+
 def main(argv=None) -> int:
     args = parse_args(argv)
     dispatch = {
         "api": cmd_api,
         "analyse": cmd_analyse,
         "backtest": cmd_backtest,
+        "trade": cmd_trade,
     }
     try:
         dispatch[args.command](args)
