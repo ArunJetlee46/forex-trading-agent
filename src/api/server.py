@@ -145,8 +145,20 @@ def create_app(agent: ForexTradingAgent | None = None) -> Flask:
     return app
 
 
-def run_server(host: str | None = None, port: int | None = None, debug: bool | None = None) -> None:
+def run_server(
+    host: str | None = None,
+    port: int | None = None,
+    debug: bool | None = None,
+    broker=None,
+    mt5_fetcher=None,
+) -> None:
     api_cfg = config.api
+    if broker is not None or mt5_fetcher is not None:
+        agent = get_agent()
+        if broker is not None:
+            agent.broker = broker
+        if mt5_fetcher is not None:
+            agent.fetcher = mt5_fetcher
     app.run(
         host=host or api_cfg["host"],
         port=port or api_cfg["port"],

@@ -37,7 +37,7 @@ A **consensus-based** approach requiring ≥ 3 indicator confirmations before ge
 - Full trade logging and P&L tracking
 
 ### Supported Currency Pairs
-`EUR/USD` · `GBP/USD` · `USD/JPY` · `AUD/USD` · `USD/CAD`
+`EUR/USD` · `GBP/USD` · `USD/JPY` · `AUD/USD` · `USD/CAD` · `XAU/EUR`
 
 ---
 
@@ -54,7 +54,10 @@ forex-trading-agent/
 │   │   └── portfolio.py     # Trade tracking and P&L analytics
 │   ├── data/
 │   │   ├── fetcher.py       # yfinance historical data retrieval
+│   │   ├── mt5_fetcher.py   # MetaTrader 5 live data retrieval
 │   │   └── processor.py     # Data cleaning and validation
+│   ├── broker/
+│   │   └── mt5_broker.py    # MetaTrader 5 trade execution
 │   ├── api/
 │   │   └── server.py        # Flask REST API
 │   ├── backtester/
@@ -106,6 +109,39 @@ python main.py api
 # or with custom host/port
 python main.py api --host 0.0.0.0 --port 8080
 ```
+
+### MetaTrader 5 Integration
+
+The agent can connect to a locally running MetaTrader 5 terminal on Windows to
+fetch live market data and execute orders directly.
+
+**Requirements:**
+
+- Windows PC with MetaTrader 5 installed and logged in to your broker account.
+- `MetaTrader5` Python package (already listed in `requirements.txt`).
+
+**Connect for live analysis only (data from MT5, no order execution):**
+
+```bash
+python main.py analyse --broker mt5
+# or with explicit account credentials
+python main.py analyse --broker mt5 --mt5-login 12345678 --mt5-password MyPass --mt5-server BrokerName-Demo
+```
+
+**Connect for live analysis via the REST API:**
+
+```bash
+python main.py api --broker mt5 --mt5-login 12345678 --mt5-password MyPass --mt5-server BrokerName-Demo
+```
+
+When `--broker mt5` is provided the agent will:
+1. Initialise the MetaTrader 5 terminal via the Python MT5 API.
+2. Fetch OHLCV bars from MT5 instead of yfinance.
+3. Send market orders through MT5 when `execute_signal()` is called.
+
+> **Note:** `MetaTrader5` is a Windows-only package.  On Linux/macOS it will not
+> install; yfinance (the default data source) will be used automatically when
+> `--broker mt5` is omitted.
 
 ### Docker
 
