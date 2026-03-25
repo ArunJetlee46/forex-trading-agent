@@ -31,13 +31,14 @@ class ForexTradingAgent:
         Optional config object; falls back to the global singleton.
     """
 
-    DEFAULT_PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD"]
+    DEFAULT_PAIRS = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "XAU/EUR"]
 
     def __init__(
         self,
         pairs: Optional[List[str]] = None,
         balance: Optional[float] = None,
         cfg=None,
+        broker=None,
     ) -> None:
         self._cfg = cfg or config
         self.pairs = pairs or self.DEFAULT_PAIRS
@@ -61,6 +62,7 @@ class ForexTradingAgent:
         self.portfolio = Portfolio()
         self.fetcher = DataFetcher(cache_ttl=self._cfg.data["cache_ttl_seconds"])
         self.processor = DataProcessor()
+        self.broker = broker  # optional MT5Broker (or None for paper trading)
 
         self._ind_params = {
             "ema_fast": ind["ema_fast"],
@@ -104,7 +106,11 @@ class ForexTradingAgent:
         return {pair: self.analyse(pair) for pair in self.pairs}
 
     def execute_signal(self, pair: str, signal: Signal) -> Optional[Trade]:
-        """Execute a BUY or SELL signal by creating a position."""
+        """Execute a BUY or SELL signal by creating a position.
+
+        When an :class:`~src.broker.mt5_broker.MT5Broker` is attached (via the
+        *broker* constructor parameter), the order is also sent to MetaTrader 5.
+        """
         if signal.signal == SignalType.HOLD:
             return None
 
@@ -125,6 +131,23 @@ class ForexTradingAgent:
             units=spec.units,
             risk_amount=spec.risk_amount,
         )
+
+        if self.broker is not None:
+            from src.data.mt5_fetcher import MT5_SYMBOL_MAP
+            symbol = MT5_SYMBOL_MAP.get(pair, pair.replace("/", ""))
+            ticket = self.broker.place_order(
+                symbol=symbol,
+                direction=spec.direction,
+                volume=spec.units,
+                price=spec.entry_price,
+                stop_loss=spec.stop_loss,
+                take_profit=spec.take_profit,
+            )
+            if ticket is not None:
+                trade.broker_ticket = ticket
+            else:
+                logger.warning("MT5 order placement failed for %s; position tracked locally only.", pair)
+
         return trade
 
     def close_trade(self, trade: Trade, exit_price: float, status: str = "CLOSED") -> float:

@@ -23,6 +23,7 @@ class DataFetcher:
         "USD/JPY": "JPY=X",
         "AUD/USD": "AUDUSD=X",
         "USD/CAD": "CAD=X",
+        "XAU/EUR": "XAUEUR=X",
     }
 
     def __init__(self, cache_ttl: int = 300) -> None:
