@@ -1,0 +1,35 @@
+{
+  "trading": {
+    "currency_pairs": ["EURUSD=X", "GBPUSD=X", "JPY=X", "AUDUSD=X", "CAD=X"],
+    "initial_balance": 10000.0,
+    "risk_per_trade": 0.02,
+    "max_drawdown": 0.10,
+    "take_profit_ratio": 3.0,
+    "stop_loss_pct": 0.02
+  },
+  "indicators": {
+    "ema_fast": 12,
+    "ema_slow": 26,
+    "rsi_period": 14,
+    "macd_fast": 12,
+    "macd_slow": 26,
+    "macd_signal": 9,
+    "bb_period": 20,
+    "bb_std": 2.0
+  },
+  "signals": {
+    "min_confirmations": 3,
+    "rsi_overbought": 70,
+    "rsi_oversold": 30
+  },
+  "data": {
+    "history_period": "1y",
+    "interval": "1d",
+    "cache_ttl_seconds": 300
+  },
+  "api": {
+    "host": "0.0.0.0",
+    "port": 5000,
+    "debug": false
+  }
+}
